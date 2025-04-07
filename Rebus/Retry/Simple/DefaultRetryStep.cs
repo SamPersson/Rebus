@@ -74,11 +74,21 @@ public class DefaultRetryStep : IRetryStep
             return;
         }
 
+        int? nativeDeliveryCount = null;
         if (transportMessage.Headers.TryGetValue(Headers.DeliveryCount, out var value) && int.TryParse(value, out var deliveryCount))
         {
-            var maxDeliveryAttempts = _retryStrategySettings.SecondLevelRetriesEnabled
-                ? 2 * _retryStrategySettings.MaxDeliveryAttempts
-                : _retryStrategySettings.MaxDeliveryAttempts;
+            nativeDeliveryCount = deliveryCount;
+            var maxDeliveryAttempts = _retryStrategySettings.MaxDeliveryAttempts;
+
+            if (_retryStrategySettings.SecondLevelRetriesEnabled)
+            {
+                if (_retryStrategySettings.TrackSecondLevelRetryByNativeDeliveryCount && deliveryCount > maxDeliveryAttempts)
+                {
+                    context.Save(DispatchAsFailedMessageKey, true);
+                }
+
+                maxDeliveryAttempts *= 2;
+            }
 
             if (deliveryCount > maxDeliveryAttempts)
             {
@@ -118,16 +128,16 @@ public class DefaultRetryStep : IRetryStep
         }
         catch (Exception exception)
         {
-            await HandleException(exception, transactionContext, messageId, context, next);
+            await HandleException(exception, transactionContext, messageId, context, next, nativeDeliveryCount);
         }
     }
 
-    async Task HandleException(Exception exception, ITransactionContext transactionContext, string messageId, IncomingStepContext context, Func<Task> next)
+    async Task HandleException(Exception exception, ITransactionContext transactionContext, string messageId, IncomingStepContext context, Func<Task> next, int? nativeDeliveryCount)
     {
         if (_failFastChecker.ShouldFailFast(messageId, exception))
         {
             // special case - it we're supposed to fail fast, AND 2nd level retries are enabled, AND this is the first delivery attempt, try to dispatch as 2nd level:
-            if (_retryStrategySettings.SecondLevelRetriesEnabled)
+            if (_retryStrategySettings.SecondLevelRetriesEnabled && (!_retryStrategySettings.TrackSecondLevelRetryByNativeDeliveryCount || nativeDeliveryCount is not > 1))
             {
                 await _errorTracker.MarkAsFinal(messageId);
                 await _errorTracker.RegisterError(messageId, exception);
@@ -144,6 +154,12 @@ public class DefaultRetryStep : IRetryStep
         }
 
         await _errorTracker.RegisterError(messageId, exception);
+
+        if (_retryStrategySettings.TrackSecondLevelRetryByNativeDeliveryCount && nativeDeliveryCount != null)
+        {
+            transactionContext.SetResult(commit: false, ack: false);
+            return;
+        }
 
         if (!await _errorTracker.HasFailedTooManyTimes(messageId))
         {

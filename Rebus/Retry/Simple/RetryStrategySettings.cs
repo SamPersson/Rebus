@@ -1,5 +1,6 @@
 ﻿using System;
 using Rebus.Messages;
+using Rebus.Retry.ErrorTracking;
 
 namespace Rebus.Retry.Simple;
 
@@ -38,7 +39,8 @@ public class RetryStrategySettings
         bool secondLevelRetriesEnabled = false,
         int errorDetailsHeaderMaxLength = int.MaxValue,
         int errorTrackingMaxAgeMinutes = DefaultErrorTrackingMaxAgeMinutes,
-        int errorQueueErrorCooldownTimeSeconds = DefaultErrorQueueErrorCooldownTimeSeconds
+        int errorQueueErrorCooldownTimeSeconds = DefaultErrorQueueErrorCooldownTimeSeconds,
+        bool trackSecondLevelRetryByNativeDeliveryCount = false
     )
     {
         if (errorDetailsHeaderMaxLength < 0)
@@ -60,6 +62,7 @@ public class RetryStrategySettings
         ErrorDetailsHeaderMaxLength = errorDetailsHeaderMaxLength;
         ErrorTrackingMaxAgeMinutes = errorTrackingMaxAgeMinutes;
         ErrorQueueErrorCooldownTimeSeconds = errorQueueErrorCooldownTimeSeconds;
+        TrackSecondLevelRetryByNativeDeliveryCount = trackSecondLevelRetryByNativeDeliveryCount;
     }
 
     /// <summary>
@@ -73,9 +76,17 @@ public class RetryStrategySettings
     public int MaxDeliveryAttempts { get; internal set; }
 
     /// <summary>
-    /// Configures whether an additional round of delivery attempts should be made with a <see cref="FailedMessageWrapper{TMessage}"/> wrapping the originally failed messageS
+    /// Configures whether an additional round of delivery attempts should be made with a <see cref="FailedMessageWrapper{TMessage}"/> wrapping the originally failed messages
     /// </summary>
     public bool SecondLevelRetriesEnabled { get; internal set; }
+
+    /// <summary>
+    /// Configures whether second level retry should start when the delivery count header is greater than MaxDeliveryAttempts, instead of counting the exceptions in the
+    /// <see cref="IErrorTracker"/>. For transports that support native delivery count this allows MaxDeliveryAttempts to be respected even with multiple independent workers,
+    /// without replacing the default <see cref="InMemErrorTracker"/>. Note though that the <see cref="FailedMessageWrapper{TMessage}"/> might not contain all (or any) exceptions then.
+    /// It also lets the second level retry be retried up to MaxDeliveryAttempts times in case it fails. If the DeliveryCount header is not set, this setting does nothing.
+    /// </summary>
+    public bool TrackSecondLevelRetryByNativeDeliveryCount { get; internal set; }
 
     /// <summary>
     /// Configures the max length of the <see cref="Headers.ErrorDetails"/> header. Depending on the configured number of delivery attempts and the transport's capabilities, it might
